@@ -16,7 +16,7 @@ func (mr *Master) schedule(phase jobPhase) {
 		nios = len(mr.files)
 	}
 
-	debug("________Schedule: %v %v tasks (%d I/Os)\n", ntasks, phase, nios)
+	debug("___ _____Schedule: %v %v tasks (%d I/Os)\n", ntasks, phase, nios)
 
 	fmt.Printf("________Schedule: %v %v tasks (%d I/Os)\n", ntasks, phase, nios)
 	/*
@@ -30,37 +30,64 @@ func (mr *Master) schedule(phase jobPhase) {
 
 	*/
 
-	taskDoneChannel := make(chan bool, ntasks)
+	pendingTasksChannel := make(chan bool, ntasks)
 
 	worker := <-mr.registerChannel
 
 	for i := 0; i < ntasks; i++ {
 
-		fmt.Println("doing this i", i, "with worker ", worker, "for task", phase)
+		//fmt.Println("doing this i", i, "with worker ", worker, "for task", phase)
 		taskArgs := new(DoTaskArgs)
 		taskArgs.File = mr.files[i]
 		taskArgs.JobName = mr.jobName
 		taskArgs.Phase = phase
 		taskArgs.TaskNumber = i
 		taskArgs.NumOtherPhase = nios
-		//	taskDoneChannel <- true
-		go mr.yalla(worker, taskArgs, taskDoneChannel)
-		worker = <-mr.registerChannel
 
+		pendingTasksChannel <- true
+		go mr.yalla(worker, taskArgs, pendingTasksChannel)
+
+		worker = <-mr.registerChannel
+		for worker == "fail" {
+			worker = <-mr.registerChannel
+			if worker != "fail" {
+				go mr.yalla(worker, taskArgs, pendingTasksChannel)
+				worker = <-mr.registerChannel
+			}
+		}
+
+		//	fmt.Println("$$$",len(pendingTasksChannel))
 	}
 
 	go func() {
 		mr.registerChannel <- worker
 	}()
 
+	//	fmt.Println("### LEN " , len(pendingTasksChannel))
+
+	/*for{
+		fmt.Println("###222 LEN " , len(pendingTasksChannel))
+
+		if(len(pendingTasksChannel)<1) {
+			break
+		}
+	}*/
+
 }
 
-func (mr *Master) yalla(workerName string, taskArgs *DoTaskArgs, taskDone chan bool) {
+func (mr *Master) yalla(workerName string, taskArgs *DoTaskArgs, taskDone chan bool) bool {
 
-	call(workerName, "Worker.DoTask", taskArgs, new(struct{}))
-	fmt.Println("******* This task is done", taskArgs.TaskNumber, taskArgs.File, " by ", workerName)
+	var result bool
+	result = call(workerName, "Worker.DoTask", taskArgs, new(struct{}))
 
-	//	<-taskDone
-	mr.registerChannel <- workerName
+	if result {
+		<-taskDone
+		mr.registerChannel <- workerName
+		return result
+	} else {
+		//	fmt.Println("******* This task ", taskArgs.TaskNumber, " by ", workerName , "is" , result, " file " , taskArgs.File)
+		mr.registerChannel <- "fail"
+		return result
+	}
 
 }
